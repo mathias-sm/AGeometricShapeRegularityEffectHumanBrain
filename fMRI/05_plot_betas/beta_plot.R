@@ -125,6 +125,37 @@ read.csv("../bids_dataset/derivatives/bootstrap_clusters/tables/adults_task-cate
   bind_rows
 
 ##############
+# Test shape1 > number in shape ROIs
+##############
+
+read.csv("../bids_dataset/derivatives/bootstrap_clusters/tables/adults_task-category_ctr-shape1_table_full.csv") %>%
+  mutate(title = paste0(idxs, " (",X,",",Y,",",Z,"); p=", pval)) %>%
+  mutate(roi_id = idxs) %>%
+  filter(roi_id %in% c(3, 28)) %>%  # Manual filtering of the relevant ROIs.
+  inner_join(dbetas, by="roi_id") %>%
+  group_by(roi_id, title) %>%
+  group_map(function(d,k) {
+  test <- mean(filter(d, roi_contrast == "shape1")$value)
+  if (is.na(test)) {
+    print(test)
+    return(NULL)
+  }
+  to.t.test <-
+    d %>%
+    filter(roi_contrast == "shape1") %>%
+    pivot_wider(names_from=name, values_from=value) %>%
+    mutate(ctr_number = shape1 - number) %>%
+    group_by(age_group)
+  t.test.number  <- mutate(summarize(to.t.test, tidy(t.test(ctr_number))),  ctr="number")
+  t.test.number %>%
+    mutate(roi=k$roi_id[[1]]) %>%
+    select(-method, -conf.low, -conf.high, -parameter)
+  }) %>%
+  bind_rows
+
+
+
+##############
 # Test shape1 and 3 ROIs in c_numer IPSs
 ##############
 
