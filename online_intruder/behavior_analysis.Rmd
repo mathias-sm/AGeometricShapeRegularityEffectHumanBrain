@@ -291,7 +291,7 @@ pl <-
     axis.title.x=element_blank(),
     axis.title.y=element_blank(),
     axis.ticks.x = element_line(),
-    axis.ticks.y = element_line()
+    axis.ticks.x = element_line()
   )
 ggsave("MDS.svg", plot = pl, height=3, width=6)
 pl
