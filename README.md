@@ -1,4 +1,4 @@
-# TwoBrainSystemsGeometricShapes
+# A geometric shape regularity effect in the human brain
 
 This is the code repository for the article "Two brain systems for the
 perception of geometric shapes". The repository contains the scripts and
