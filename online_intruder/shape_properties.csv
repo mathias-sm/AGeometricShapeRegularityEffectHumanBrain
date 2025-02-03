@@ -1,0 +1,12 @@
+shape,num_of_right_angle,num_of_parallel,num_of_eq_length,num_of_eq_angle
+square,4,2,6,6
+rectangle,4,2,2,6
+isoTrapezoid,0,1,3,3
+parallelogram,0,2,2,3
+losange,0,2,6,3
+kite,1,0,2,0
+rightKite,2,0,2,1
+rustedHinge,1,1,3,3
+hinge,2,1,3,1
+trapezoid,2,1,1,1
+random,1,0,0,1

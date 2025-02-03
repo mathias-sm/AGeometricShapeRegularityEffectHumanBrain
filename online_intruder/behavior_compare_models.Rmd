@@ -1,0 +1,271 @@
+---
+title: Visual Search, all pairs, behavior analysis
+author:
+  - Mathias Sablé-Meyer
+  - [...]
+  - Stanislas Dehaene
+lang: en
+output: rmdformats::readthedown
+---
+
+```{r settings, echo = FALSE, message=FALSE}
+knitr::opts_chunk$set(echo    = FALSE)
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(ggplot2, grid, cowplot,     # Plot manipulation & theme
+               jsonlite,                   # Data parsing
+               tidyverse, broom, magrittr, # Pipelineing, %>%, tidying, etc.
+               stringi,                    # UUID generation
+               patchwork,
+               corrplot,
+               ggcorrplot,
+               MetBrewer, ggtext, ggrain, ggsignif,
+               install = T)
+
+theme_set(theme_cowplot() +
+          theme(text = element_text(family = "Calibri", size=9),
+                axis.text = element_text(size=9),
+                panel.grid.major.x = element_blank() ,
+                panel.grid.major.y = element_line( linewidth=.1, color="black")))
+```
+
+# Load the data and prepare it
+
+Read the data and do minimal cleanup: no output
+
+```{r prepareThings}
+levelsInOrder <- c("square", "rectangle", "isoTrapezoid", "parallelogram", "losange", "kite", "rightKite", "rustedHinge", "hinge", "trapezoid", "random")
+restricted <- c("square", "rectangle", "isoTrapezoid", "losange", "hinge", "random")
+imgsInOrder <-
+  lapply(levelsInOrder,
+         function(x) {
+           paste0("<img src='./res/",x,".png' width='10' />")
+         })
+```
+
+```{r loadData}
+raw <-
+  unzip(zipfile = "behavior_data.zip", list = TRUE) %>%
+  filter(Length > 0) %>%
+  pull(Name) %>%
+  lapply(function(f) { return(read.csv(unz("behavior_data.zip", f)))}) %>%
+  bind_rows
+
+demographics <-
+  raw %>%
+  filter(trial_type == "survey-dropdown") %>%
+  select(ID, responses) %>%
+  mutate(json = map(responses, ~ fromJSON(.) %>% as.data.frame())) %>%
+  unnest(cols=c(json)) %>%
+  select(-responses) %>%
+  transmute(ID=ID,
+            country=Q0,
+            gender=Q1,
+            age=as.numeric(Q2),
+            degree=factor(Q3),
+            math=if_else(Q4=="NA", NA_integer_, strtoi(Q4)),
+            lang=as.numeric(Q5))
+
+d <-
+  raw %>%
+  filter(trial_type == "oddball-grid") %>%
+  mutate(shape1 = ordered(shape1, levels=levelsInOrder),
+         shape2 = ordered(shape2, levels=levelsInOrder)) %>%
+  rename(reference=shape1, intruder=shape2) %>%
+  inner_join(demographics, by="ID") %>%
+  filter(age > 18) %>%
+  filter(!is.na(math))
+```
+
+```{r prepareRDMMatrices}
+load_model <- function(path, name) {
+  read.csv(path) %>%
+  pivot_longer(c(everything(), -X)) %>%
+  filter(X != name) %>%
+  transmute(reference=X, intruder=name, "{name}" := as.numeric(scale(value))) %>%
+  mutate(reference = ordered(reference, levels=levelsInOrder),
+         intruder = ordered(intruder, levels=levelsInOrder))
+}
+
+symbolic     <- load_model("../derive_theoretical_RDMs/symbolic/symbolic_sym_diss_mat.csv", "symbolic")
+dino_last    <- load_model("../derive_theoretical_RDMs/NNs_from_Maxence/RDMs/dino/last_layer", "dino_last")
+dino_prelast <- load_model("../derive_theoretical_RDMs/NNs_from_Maxence/RDMs/dino/layer_9", "dino_prelast")
+cornet_IT    <- load_model("../derive_theoretical_RDMs/CNN/output/diss_mat_model-cornet_s_layer-IT.csv", "cornet_IT")
+skeleton_1   <- load_model("../derive_theoretical_RDMs/skeletons_from_tm/method_1.csv", "skeleton_1")
+skeleton_2   <- load_model("../derive_theoretical_RDMs/skeletons_from_tm/method_2.csv", "skeleton_2")
+```
+
+
+# Comparing with other CNNs
+
+```{r compareModels, fig.width=3.5, fig.height=3.5}
+corr_mat <-
+  d %>%
+  mutate(reref = if_else(reference < intruder, reference, intruder)) %>%
+  mutate(reint = if_else(reference < intruder, intruder, reference)) %>%
+  mutate(reference = reref, intruder = reint) %>%
+  group_by(ID, reference, intruder) %>%
+  summarize(human = mean(success == "true")/mean(rt), .groups="drop") %>%
+  group_by(ID) %>%
+  mutate(human = scale(human)) %>%
+  group_by(reference, intruder) %>%
+  summarize(human = mean(human)) %>%
+  ungroup %>%
+  inner_join(symbolic, by=c("reference", "intruder")) %>%
+  inner_join(dino_last, by=c("reference", "intruder")) %>%
+  inner_join(cornet_IT, by=c("reference", "intruder")) %>%
+  inner_join(dino_prelast, by=c("reference", "intruder")) %>%
+  inner_join(skeleton_1, by=c("reference", "intruder")) %>%
+  inner_join(skeleton_2, by=c("reference", "intruder")) %>%
+  select(-reference, -intruder) %>%
+  select(skeleton_2, skeleton_1, dino_prelast, cornet_IT, dino_last, symbolic, human) %>%
+  #rename(h=human, s = symbolic, dl = dino_last, ci = cornet_IT, dp = dino_prelast, sk1 = skeleton_1, sk2=skeleton_2) %>%
+  cor
+
+ggsave("/tmp/test.svg", pl = ggcorrplot(corr_mat, lab = T, show.diag = F))
+```
+
+```{r}
+d <-
+  unzip(zipfile = "behavior_data.zip", list = TRUE) %>%
+  filter(Length > 0) %>%
+  pull(Name) %>%
+  lapply(function(f) { return(read.csv(unz("behavior_data.zip", f)))}) %>%
+  bind_rows %>%
+  filter(trial_type == "oddball-grid") %>%
+  mutate(shape1 = ordered(shape1, levels=levelsInOrder),
+         shape2 = ordered(shape2, levels=levelsInOrder)) %>%
+  rename(reference=shape1, intruder=shape2) %>%
+  inner_join(demographics, by="ID") %>%
+  filter(age > 18) %>%
+  filter(!is.na(math))
+```
+
+```{r}
+base_d <-
+  d %>%
+  mutate(reref = if_else(reference < intruder, reference, intruder)) %>%
+  mutate(reint = if_else(reference < intruder, intruder, reference)) %>%
+  mutate(reference = reref, intruder = reint) %>%
+  group_by(ID, reference, intruder) %>%
+  summarize(human = mean(success == "true")/mean(rt), .groups="drop") %>%
+
+to_rain_plot <-
+  base_d %>%
+  group_by(ID) %>%
+  mutate(humans = scale(score)) %>%
+  inner_join(dino_last, by=c("reference", "intruder")) %>%
+  inner_join(cornet_IT, by=c("reference", "intruder")) %>%
+  group_modify(function(d,k) {
+    d %>%
+      lm(humans ~ 0 + cornet_IT + dino_last, data=.) %>%
+      tidy
+  })
+
+
+t.test(filter(to_rain_plot, term == "cornet_IT")$estimate)
+t.test(filter(to_rain_plot, term == "dino_last")$estimate)
+t.test(filter(to_rain_plot, term == "dino_last")$estimate - filter(to_rain_plot, term == "cornet_IT")$estimate)
+
+asbmax <-
+  base_d %>%
+  group_by(ID) %>%
+  mutate(humans = scale(score)) %>%
+  group_by(reference, intruder) %>%
+  summarize(score = mean(score), .groups="drop") %>%
+  mutate(score = scale(score)) %>%
+  pull(score) %>%
+  abs %>%
+  max
+
+absmax <- max(asbmax, abs(dino_last$dino_last), abs(cornet_IT$cornet_IT))
+
+plh <-
+  base_d %>%
+  group_by(ID) %>%
+  mutate(humans = scale(score)) %>%
+  group_by(reference, intruder) %>%
+  summarize(score = mean(score), .groups="drop") %>%
+  mutate(score = scale(score)) %>%
+  mutate(sym = score) %>%
+  pivot_longer(c(score, sym)) %>%
+  rowwise %>%
+  mutate(rereference = if_else(name == "sym", intruder, reference),
+         reintruder = if_else(name == "sym", reference, intruder)) %>%
+  mutate(reference = rereference, intruder = reintruder) %>%
+  mutate(score = value) %>%
+  complete(reference, intruder) %>%
+  filter(reference <= intruder) %>%
+  ggplot(aes(x=reference, y=intruder, fill=score)) +
+  geom_tile() +
+  coord_fixed() +
+  scale_fill_gradientn(na.value = 'transparent', name="Dissimilarity\nz-score", limits=c(-absmax, absmax), colors=met.brewer("Hiroshige", type="continuous")) +
+  theme(panel.grid.major.y = element_blank()) +
+  ylab("") + xlab("") +
+  scale_x_discrete(labels=imgsInOrder) +
+  scale_y_discrete(labels=imgsInOrder)+
+  theme(axis.text.x = element_markdown(color = "black", size = 11)) +
+  theme(axis.text.y = element_markdown(color = "black", size = 11)) +
+  theme(legend.position="none") +
+  ggtitle("Human Behavior")
+
+pls <-
+  dino_last %>%
+  complete(reference, intruder) %>%
+  filter(reference <= intruder) %>%
+  mutate(score = dino_last) %>%
+  ggplot(aes(x=reference, y=intruder, fill=score)) +
+  geom_tile() +
+  coord_fixed() +
+  scale_fill_gradientn(na.value = 'transparent', name="Dissimilarity\nz-score", limits=c(-absmax, absmax), colors=met.brewer("Hiroshige", type="continuous")) +
+  theme(panel.grid.major.y = element_blank()) +
+  ylab("") + xlab("") +
+  scale_x_discrete(labels=imgsInOrder)+
+  scale_y_discrete(labels=c()) +
+  theme(axis.text.x = element_markdown(color = "black", size = 11)) +
+  theme(axis.text.y = element_markdown(color = "black", size = 11)) +
+  theme(legend.position="none") +
+  ggtitle("dino_last")
+
+plc <-
+  cornet_IT %>%
+  complete(reference, intruder) %>%
+  filter(reference <= intruder) %>%
+  mutate(score = cornet_IT) %>%
+  ggplot(aes(x=reference, y=intruder, fill=score)) +
+  geom_tile() +
+  coord_fixed() +
+  scale_fill_gradientn(na.value = 'transparent', name="Dissimilarity\nz-score", limits=c(-absmax, absmax), colors=met.brewer("Hiroshige", type="continuous")) +
+  theme(panel.grid.major.y = element_blank()) +
+  ylab("") + xlab("") +
+  scale_x_discrete(labels=imgsInOrder) +
+  scale_y_discrete(labels=c()) +
+  theme(axis.text.x = element_markdown(color = "black", size = 11)) +
+  theme(axis.text.y = element_markdown(color = "black", size = 11)) +
+  ggtitle("cornet_IT")
+
+plreg <-
+  to_rain_plot %>%
+  mutate(term = factor(term, levels=c("dino_last", "cornet_IT"))) %>%
+  ggplot(aes(x = term, y=estimate, fill=term)) +
+  geom_rain(
+    rain.side = 'f1x1',
+    id.long.var = "ID",
+    point.args.pos = rlang::list2(size=0.5),
+    line.args.pos = rlang::list2()) +
+  scale_fill_manual(values=c("#f1a340", "#998ec3")) +
+  geom_signif(
+    comparisons = list(c("dino_last", "cornet_IT")),
+    map_signif_level = TRUE,
+    tip_length = 0) +
+  theme(legend.position = "none",
+        axis.text.x=element_blank(),
+        axis.title.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        )
+
+plot <- (plh | pls | plc | plreg)
+plot
+ggsave("~/sharedFolder/plreg_dino.svg", plot = plot)
+```

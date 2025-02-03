@@ -1,0 +1,370 @@
+---
+title: Two brain systems for the perception of geometric shapes
+subtitle: fMRI Behavior analysis
+author:
+  - Mathias Sablé-Meyer
+  - Lucas Benjamin
+  - Fosca Al Roumi
+  - Cassandra Potier Watkins
+  - Chenxi He
+  - Stanislas Dehaene
+lang: en
+output: rmdformats::readthedown
+---
+
+```{r setup}
+library(tidyverse)
+library(broom)
+library(stringr)
+library(ggplot2)
+library(rjson)
+library(cowplot)
+library(patchwork)
+library(directlabels)
+library(officer)
+library(rvg)
+library(afex)
+library(huxtable)
+library(ggnewscale)
+library(ggtext)
+
+weights_hard =
+  fromJSON('{
+    "square": 0.0748,
+    "rectangle": 0.0653,
+    "isoTrapezoid": 0.151,
+    "parallelogram": 0.178,
+    "losange": 0.215,
+    "kite": 0.231,
+    "hinge": 0.303,
+    "random": 0.424
+  }') %>%
+  as.data.frame %>%
+  t %>%
+  as.data.frame %>%
+  mutate(., shape_name = rownames(.),cost=V1) %>%
+  select(-V1)
+
+levelsInOrder <- c("square",
+                   "rectangle",
+                   "isoTrapezoid",
+                   "parallelogram",
+                   "losange",
+                   "kite",
+                   "rightKite",
+                   "rustedHinge",
+                   "hinge",
+                   "trapezoid",
+                   "random")
+
+# square, rectangle, isoTrapezoid, losange, hinge, random
+
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+colors <- gg_color_hue(11)
+
+all.data <-
+  read.csv("data/aggregated_adults_intruder.csv") %>%
+  rbind(read.csv("data/aggregated_kids_intruder.csv")) %>%
+  filter(!is.na(pressed))
+```
+
+```{r}
+all.data %>%
+  group_by(subject_id, run) %>%
+  mutate(task = sum(shape_name == "color_6")) %>%
+  mutate(task = if_else(task > 0, "geometryHard", "geometry")) %>%
+  filter(!grepl("color", shape_name)) %>%
+  mutate(age_group = if_else(subject_id < 300, "Adults", "6 years old")) %>%
+  ungroup %>%
+  mutate(condition = factor(paste0(age_group, ", ", task))) %>%
+  group_by(subject_id, shape_name, condition) %>%
+  summarize(error = mean(1 - correct)) %>%
+  group_by(condition) %>%
+  group_modify(function(d,k) {
+    tres <- 
+      d %>%
+      group_by(subject_id) %>%
+      summarize(error = mean(error)) %>%
+      ungroup %>%
+      pull(error) %>%
+      t.test(mu=.5)
+    print(tres)
+    data.frame(pval = tres$p.value)
+  }) %>%
+  print
+```
+
+```{r}
+all.data %>%
+  group_by(subject_id, run) %>%
+  mutate(task = sum(shape_name == "color_6")) %>%
+  mutate(task = if_else(task > 0, "geometryHard", "geometry")) %>%
+  filter(!grepl("color", shape_name)) %>%
+  mutate(age_group = if_else(subject_id < 300, "Adults", "6 years old")) %>%
+  ungroup %>%
+  mutate(condition = factor(paste0(age_group, ", ", task))) %>%
+  group_by(subject_id, shape_name, condition) %>%
+  summarize(rt = mean(rt)) %>%
+  group_by(subject_id, condition) %>%
+  summarize(rt = mean(rt)) %>%
+  group_by(condition) %>%
+  summarize(rt = mean(rt)) %>%
+  print
+```
+
+```{r}
+all.data %>%
+  group_by(subject_id, run) %>%
+  mutate(task = sum(shape_name == "color_6")) %>%
+  mutate(task = if_else(task > 0, "geometryHard", "geometry")) %>%
+  filter(!grepl("color", shape_name)) %>%
+  mutate(age_group = if_else(subject_id < 300, "Adults", "6 years old")) %>%
+  ungroup %>%
+  mutate(condition = factor(paste0(age_group, ", ", task))) %>%
+  group_by(subject_id, shape_name, condition) %>%
+  summarize(error = mean(1 - correct)) %>%
+  group_by(condition) %>%
+  group_modify(function(d,k) {
+    aov_4(error ~ shape_name + (shape_name | subject_id), d) %>%
+      nice(correction="none")
+  }) %>%
+  mutate(Statistic = paste0("F(",gsub(", ", ",", df),")=",gsub(" \\*\\*\\*", "", F))) %>%
+  select(condition, Statistic, ges, p.value) %>%
+  separate(condition, into=c("age", "task"), sep=", ") %>%
+  hux
+```
+
+```{r}
+myround <- function(x) { if_else(x < 0.01, "p<.01", paste0("p = ", round(x, 2)))}
+
+data_to_plot <-
+  all.data %>%
+  group_by(subject_id, run) %>%
+  mutate(task = sum(shape_name == "color_6")) %>%
+  mutate(task = if_else(task > 0, "geometryHard", "geometry")) %>%
+  mutate(age_group = if_else(subject_id < 300, "Adults", "6 years old")) %>%
+  ungroup %>%
+  mutate(shape_name = factor(shape_name, levels=levelsInOrder)) %>%
+  filter(!is.na(shape_name)) %>%
+  mutate(condition = factor(paste0(age_group, ", ", task))) %>%
+  group_by(subject_id, shape_name, condition) %>%
+  summarize(error = mean(1 - correct)) %>%
+  group_by(shape_name, condition) %>%
+  summarize(se=sd(error)/sqrt(length(error)),
+            error = mean(error))
+
+reg.v <-
+  data_to_plot %>%
+  inner_join(weights_hard) %>%
+  group_by(condition) %>%
+  group_modify(~ glance(lm(error ~ cost, data = .x))) %>%
+  mutate(text = paste0(condition, "\r", "r²=", round(r.squared, 2), ", ", myround(p.value))) %>%
+  select(condition, text)
+
+imgs <-
+  lapply(data_to_plot %$% shape_name %>% unique,
+         function(x) {
+           paste0("<img src='./res/",x,".png' width='25' />")
+         })
+
+pl.er <-
+  data_to_plot %>%
+  filter(!grepl("color", shape_name)) %>%
+  ggplot(aes(x = shape_name, y = error, group=condition)) +
+  theme_cowplot() +
+  geom_line(aes(color=condition), size=1) +
+  geom_text(data=reg.v, aes(color=condition, x = 1, y=(4-as.numeric(condition))/30, label=text), hjust = 0) +
+  scale_colour_manual(values = c("grey40", "grey70", "black")) +
+  new_scale_colour() +
+  scale_colour_manual(values = colors, drop=F) +
+  geom_point(aes(color=shape_name), size=2) +
+  geom_errorbar(aes(color=shape_name, ymin=error-se, ymax=error+se), width=0) +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_markdown(color = "black", size = 11)) +
+  scale_x_discrete(labels=imgs) +
+  xlab("") + ylab("")
+```
+
+
+```{r}
+reg.rt <-
+  all.data %>%
+  group_by(subject_id, run) %>%
+  mutate(task = sum(shape_name == "color_6")) %>%
+  mutate(task = if_else(task > 0, "geometryHard", "geometry")) %>%
+  #filter(task != "geometryHard") %>%
+  filter(!grepl("color", shape_name)) %>%
+  mutate(age_group = if_else(subject_id < 300, "Adults", "6 years old")) %>%
+  ungroup %>%
+  mutate(condition = factor(paste0(age_group, ", ", task))) %>%
+  group_by(subject_id, shape_name, condition) %>%
+  summarize(rt = mean(rt)) %>%
+  group_by(shape_name, condition) %>%
+  summarize(rt = mean(rt)) %>%
+  inner_join(weights_hard) %>%
+  group_by(condition) %>%
+  group_modify(~ glance(lm(rt ~ cost, data = .x))) %>%
+  mutate(text = paste0(condition, "\r", "r²=", round(r.squared, 2), ", ", myround(p.value))) %>%
+  select(condition, text)
+
+pl.rt <- 
+  all.data %>%
+  group_by(subject_id, run) %>%
+  mutate(task = sum(shape_name == "color_6")) %>%
+  mutate(task = if_else(task > 0, "geometryHard", "geometry")) %>%
+  #filter(task != "geometryHard") %>%
+  mutate(age_group = if_else(subject_id < 300, "Adults", "6 years old")) %>%
+  ungroup %>%
+  mutate(condition = factor(paste0(age_group, ", ", task))) %>%
+  mutate(shape_name = factor(shape_name, levels=levelsInOrder)) %>%
+  filter(!is.na(shape_name)) %>%
+  group_by(subject_id, shape_name, condition) %>%
+  summarize(error = mean(1 - correct),
+            rt = mean(rt)) %>%
+  group_by(shape_name, condition) %>%
+  summarize(se=sd(rt)/sqrt(length(rt)),
+            rt = mean(rt)) %>%
+  ggplot(aes(x = shape_name, y = rt, group=condition)) +
+  theme_cowplot() +
+  geom_line(aes(color=condition), size=1) +
+  geom_text(data=reg.rt, aes(color=condition, x = 1, y=900 + 60*(3-as.numeric(condition)), label=text), hjust = 0) +
+  scale_colour_manual(values = c("grey40", "grey70", "black")) +
+  new_scale_colour() +
+  scale_colour_manual(values = colors, drop=F) +
+  geom_point(aes(color=shape_name), size=2) +
+  geom_errorbar(aes(color=shape_name, ymin=rt-se, ymax=rt+se), width=0) +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_markdown(color = "black", size = 11)) +
+  scale_x_discrete(labels=imgs) +
+  xlab("") + ylab("")
+```
+
+```{r}
+rt.er <-
+  all.data %>%
+  group_by(subject_id, run) %>%
+  mutate(shape_name = factor(shape_name, levels=levelsInOrder)) %>%
+  mutate(task = sum(shape_name == "color_6")) %>%
+  mutate(task = if_else(task > 0, "geometryHard", "geometry")) %>%
+  #filter(task != "geometryHard") %>%
+  filter(!grepl("color", shape_name)) %>%
+  mutate(age_group = if_else(subject_id < 300, "Adults", "6 years old")) %>%
+  ungroup %>%
+  mutate(shape_name = factor(shape_name, levels=levelsInOrder)) %>%
+  filter(!is.na(shape_name)) %>%
+  mutate(condition = factor(paste0(age_group, ", ", task))) %>%
+  group_by(subject_id, shape_name, condition) %>%
+  summarize(error = mean(1 - correct),
+            rt = mean(rt)) %>%
+  group_by(shape_name, condition) %>%
+  summarize(error=mean(error),
+            rt = mean(rt)) %>%
+  ggplot(aes(x=rt, y=error, group=condition)) +
+  theme_cowplot() +
+  scale_colour_manual(values = c("grey40", "grey70", "black")) +
+  geom_smooth(aes(color=condition), method="lm", se=F) +
+  new_scale_colour() +
+  scale_colour_manual(values = colors, drop=F) +
+  geom_point(aes(color=shape_name), size=2) +
+  theme(legend.position = "none")
+```
+
+```{r}
+(pl.rt + pl.er + rt.er)
+```
+
+
+```{r}
+myround <- function(x) { if_else(x < 0.01, "p<.01", paste0("p = ", round(x, 2)))}
+
+all.data <-
+  all.data %>%
+  filter(shape_name != "square",
+         shape_name != "rectangle")
+
+data_to_plot <-
+  all.data %>%
+  group_by(subject_id, run) %>%
+  mutate(task = sum(shape_name == "color_6")) %>%
+  mutate(task = if_else(task > 0, "geometryHard", "geometry")) %>%
+  mutate(age_group = if_else(subject_id < 300, "Adults", "6 years old")) %>%
+  ungroup %>%
+  mutate(shape_name = factor(shape_name, levels=levelsInOrder)) %>%
+  filter(!is.na(shape_name)) %>%
+  mutate(condition = factor(paste0(age_group, ", ", task))) %>%
+  group_by(subject_id, shape_name, condition) %>%
+  summarize(error = mean(1 - correct)) %>%
+  group_by(shape_name, condition) %>%
+  summarize(se=sd(error)/sqrt(length(error)),
+            error = mean(error))
+
+reg.v <-
+  data_to_plot %>%
+  inner_join(weights_hard) %>%
+  group_by(condition) %>%
+  group_modify(~ glance(lm(error ~ cost, data = .x))) %>%
+  mutate(text = paste0(condition, "\r", "r²=", round(r.squared, 2), ", ", myround(p.value))) %>%
+  select(condition, text)
+
+imgs <-
+  lapply(data_to_plot %$% shape_name %>% unique,
+         function(x) {
+           paste0("<img src='./res/",x,".png' width='25' />")
+         })
+
+pl.er <-
+  data_to_plot %>%
+  filter(!grepl("color", shape_name)) %>%
+  ggplot(aes(x = shape_name, y = error, group=condition)) +
+  theme_cowplot() +
+  geom_line(aes(color=condition), size=1) +
+  geom_text(data=reg.v, aes(color=condition, x = 1, y=(4-as.numeric(condition))/30, label=text), hjust = 0) +
+  scale_colour_manual(values = c("grey40", "grey70", "black")) +
+  new_scale_colour() +
+  scale_colour_manual(values = colors, drop=F) +
+  geom_point(aes(color=shape_name), size=2) +
+  geom_errorbar(aes(color=shape_name, ymin=error-se, ymax=error+se), width=0) +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_markdown(color = "black", size = 11)) +
+  scale_x_discrete(labels=imgs) +
+  xlab("") + ylab("")
+
+pl.er
+```
+
+
+```{r}
+all.data %>%
+  filter(shape_name != "color_2",
+         shape_name != "color_6") %>%
+  filter(subject_id < 300) %>%
+  group_by(subject_id, shape_name) %>%
+  summarize(side_bias = mean(pressed == "right_key")) %>%
+  ungroup %>%
+  aov_4(side_bias ~ shape_name + (shape_name | subject_id), data=.) %>%
+  nice
+
+all.data %>%
+  filter(shape_name != "color_2",
+         shape_name != "color_6") %>%
+  filter(subject_id >= 300) %>%
+  group_by(subject_id, shape_name) %>%
+  summarize(side_bias = mean(pressed == "right_key")) %>%
+  ungroup %>%
+  aov_4(side_bias ~ shape_name + (shape_name | subject_id), data=.) %>%
+  nice
+
+all.data %>%
+  filter(shape_name != "color_2",
+         shape_name != "color_6") %>%
+  group_by(subject_id, shape_name) %>%
+  summarize(side_bias = mean(pressed == "right_key")) %>%
+  inner_join(weights_hard) %>%
+  mixed(side_bias ~ cost + (1|subject_id), data=.) %>%
+  nice
+```
+

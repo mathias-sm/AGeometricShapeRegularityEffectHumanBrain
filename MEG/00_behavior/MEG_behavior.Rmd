@@ -1,0 +1,133 @@
+---
+title: Two brain systems for the perception of geometric shapes
+subtitle: MEG Behavior analysis
+author:
+  - Mathias Sablé-Meyer
+  - Lucas Benjamin
+  - Fosca Al Roumi
+  - Cassandra Potier Watkins
+  - Chenxi He
+  - Stanislas Dehaene
+output: rmdformats::readthedown
+---
+
+```{r echo = FALSE, cache = FALSE, message=FALSE}
+# This loads packages and install them if need be:
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(ggplot2,
+               ggthemes,
+               jsonlite,
+               tidyverse,
+               grid,
+               broom,
+               cowplot,
+               afex,
+               kableExtra, install = TRUE)
+
+theme_set(theme_cowplot() +
+          theme(text = element_text(family = "Calibri", size=9),
+                axis.text = element_text(size=9),
+                panel.grid.major.x = element_blank() ,
+                panel.grid.major.y = element_line( size=.1, color="black")))
+```
+
+```{r}
+subjects <-
+  unzip("MEG_behavior_data.zip", list=TRUE) %>%
+  filter(Length > 0) %>%
+  pull(Name)
+
+data <- data.frame()
+for (s in subjects) {
+  data <-
+    fromJSON(unz("MEG_behavior_data.zip", s)) %>%
+    select(results) %>%
+    .[[1]] %>%
+    .[c(6)] %>%
+    bind_rows %>%
+    mutate(type = id,
+           ID=substr(s, 8, nchar(s) - 5),
+           error = !success,
+           outlier_type = factor(outlier_type),
+           outlierPosition = factor(outlierPosition),
+           choice = factor(choice)) %>%
+    bind_rows(data, .)
+}
+
+ref = read.csv("online_human_2.csv")
+```
+
+```{r}
+# Factorize and reorder.
+levelsInOrder <- c("rectangle", "square", "isoTrapezoid", "parallelogram", "losange", "kite", "rightKite", "rustedHinge", "hinge", "trapezoid", "random")
+data$shape <- factor(data$shape, levels = levelsInOrder)
+```
+
+```{r}
+data %>%
+  group_by(shape,ID) %>%
+  summarize(er=mean(error)) %>%
+  group_by(shape) %>%
+  summarize(se=sd(er)/sqrt(length(er)), er=mean(er)) %>%
+  ggplot(aes(x=shape, y=er)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=er-se, ymax=er+se), width=0)
+```
+
+```{r}
+data %>%
+  group_by(shape,ID) %>%
+  summarize(er=mean(error)) %>%
+  ggplot(aes(x=shape, y=er)) +
+  geom_smooth(aes(group=ID), se=F, method="lm", color="black")
+```
+
+```{r}
+toreg <-
+  data %>%
+  group_by(shape,ID) %>%
+  summarize(score=mean(error)) %>%
+  group_by(shape) %>%
+  summarize(se=sd(score)/sqrt(19),
+            score=mean(score)) %>%
+  inner_join(ref, by="shape")
+
+myround <- function(x) { if_else(x < 0.001, "p<.001", paste0("p=", round(x, 2)))}
+gl <- glance(lm(error ~ score, toreg))
+str = paste0("r²=", round(gl$r.squared[[1]],2),"; ", myround(gl$p.value[[1]]))
+
+toreg %>%
+  ggplot(aes(x=error, y=score, color=shape)) +
+  geom_smooth(se=F, method="lm", color="black") +
+  geom_point() +
+  geom_errorbar(aes(ymin=score-se, ymax=score+se), width=0) +
+  annotate("text", x=0.2, y=0.2, label=str)
+```
+
+```{r}
+unique(length(unique(data$ID)))
+data %>%
+  group_by(shape,ID) %>%
+  summarize(er=mean(error)) %>%
+  group_by(ID) %>%
+  mutate(er = scale(er)) %>%
+  inner_join(mutate(ref, error=scale(error)), by="shape") %>%
+  group_by(ID) %>%
+  group_modify(function(d,k) {
+    mdl <- lm(er ~ 0 + error, data=d)
+    res <- summary(mdl)
+    data.frame(p.value = pt(coef(res)[, 3], mdl$df, lower = FALSE))
+  }) %>%
+  filter(p.value > .05)
+```
+
+
+```{r}
+data %>%
+  group_by(ID,shape) %>%
+  summarize(er = mean(error)) %>%
+  inner_join(rename(ref, score=error), by="shape") %>%
+  mixed(I(score - 1*er) ~ score + (score || ID), data=.) %>%
+  #mixed(er ~ score + (score || ID), data=.) %>%
+  nice
+```

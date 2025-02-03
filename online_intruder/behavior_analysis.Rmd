@@ -1,0 +1,537 @@
+---
+title: Visual Search, all pairs, behavior analysis
+author:
+  - Mathias Sablé-Meyer
+  - [...]
+  - Stanislas Dehaene
+lang: en
+output: rmdformats::readthedown
+---
+
+```{r settings, echo = FALSE, message=FALSE}
+knitr::opts_chunk$set(echo    = FALSE)
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(ggplot2, grid, cowplot,     # Plot manipulation & theme
+               jsonlite,                   # Data parsing
+               tidyverse, broom, magrittr, # Pipelineing, %>%, tidying, etc.
+               stringi,                    # UUID generation
+               afex,                       # Sane defaults for `aov` through `aov_ez`
+               ggrain,
+               ggsignif,
+               rsvg,
+               ggimage,
+               patchwork,
+               MetBrewer,
+               smacof,
+               png,
+               broom.mixed,
+               ggtext,
+               pbapply,
+               parallel,
+               optimx,
+               car,
+               ggpubr,
+               corrplot,
+               install = T)
+
+theme_set(theme_cowplot() +
+          theme(text = element_text(family = "Calibri", size=9),
+                axis.text = element_text(size=9),
+                panel.grid.major.x = element_blank() ,
+                panel.grid.major.y = element_line( linewidth=.1, color="black")))
+```
+
+# Load the data and prepare it
+
+Read the data and do minimal cleanup: no output
+
+```{r prepareThings}
+levelsInOrder <- c("square", "rectangle", "isoTrapezoid", "parallelogram", "losange", "kite", "rightKite", "rustedHinge", "hinge", "trapezoid", "random")
+restricted <- c("square", "rectangle", "isoTrapezoid", "losange", "hinge", "random")
+imgsInOrder <-
+  lapply(levelsInOrder,
+         function(x) {
+           paste0("<img src='./res/",x,".png' width='10' />")
+         })
+```
+
+```{r loadData}
+raw <-
+  unzip(zipfile = "behavior_data.zip", list = TRUE) %>%
+  filter(Length > 0) %>%
+  pull(Name) %>%
+  lapply(function(f) { return(read.csv(unz("behavior_data.zip", f)))}) %>%
+  bind_rows
+
+demographics <-
+  raw %>%
+  filter(trial_type == "survey-dropdown") %>%
+  select(ID, responses) %>%
+  mutate(json = map(responses, ~ fromJSON(.) %>% as.data.frame())) %>% 
+  unnest(cols=c(json)) %>%
+  select(-responses) %>%
+  transmute(ID=ID,
+            country=Q0,
+            gender=Q1,
+            age=as.numeric(Q2),
+            degree=factor(Q3),
+            math=if_else(Q4=="NA", NA_integer_, strtoi(Q4)),
+            lang=as.numeric(Q5))
+
+d <-
+  raw %>%
+  filter(trial_type == "oddball-grid") %>%
+  mutate(shape1 = ordered(shape1, levels=levelsInOrder),
+         shape2 = ordered(shape2, levels=levelsInOrder)) %>%
+  rename(reference=shape1, intruder=shape2) %>%
+  inner_join(demographics, by="ID") %>%
+  filter(age > 18) %>%
+  filter(!is.na(math))
+
+props_all <-
+  read.csv("./shape_properties.csv") %>%
+  mutate(num_all = scale(num_of_right_angle + num_of_parallel + num_of_eq_length + num_of_eq_angle))
+```
+
+```{r prepareRDMMatrices}
+load_model <- function(path, name) {
+  read.csv(path) %>%
+  pivot_longer(c(everything(), -X)) %>%
+  filter(X != name) %>%
+  transmute(reference=X, intruder=name, "{name}" := scale(value)) %>%
+  mutate(reference = ordered(reference, levels=levelsInOrder),
+         intruder = ordered(intruder, levels=levelsInOrder))
+}
+
+symbolic <- load_model("../derive_theoretical_RDMs/symbolic/symbolic_sym_diss_mat.csv", "symbolic")
+cornet   <- load_model("../derive_theoretical_RDMs/CNN/output/diss_mat_model-cornet_s_layer-IT.csv", "cornet")
+
+to_mds <-
+  d %>%
+  group_by(reference, intruder) %>%
+  summarize(score = mean(success=="true")/mean(rt), .groups="drop") %>%
+  complete(reference, intruder) %>%
+  pivot_wider(names_from="intruder",values_from="score") %>%
+  column_to_rownames("reference")
+
+to_mds <- (to_mds + t(to_mds)) / 2
+```
+
+## Demographics info
+
+```{r basicDemographics}
+d %>%
+  select(ID,age,gender) %>%
+  unique %>%
+  pull(age) %>%
+  summary
+
+d %>%
+  select(ID,age,gender) %>%
+  unique %>%
+  pull(gender) %>%
+  table
+
+d %>%
+  select(ID) %>%
+  unique %>%
+  pull(ID) %>%
+  length
+```
+
+# Correlation between models' RDM
+
+```{r RDMCorrelation, results="markup"}
+filter(cornet, reference < intruder) %>%
+  inner_join(filter(symbolic, reference < intruder), by=c("reference", "intruder")) %>%
+  lm(cornet ~ 0 + symbolic, data=.) %>%
+  summary
+
+filter(cornet, reference < intruder) %>%
+  inner_join(filter(symbolic, reference < intruder), by=c("reference", "intruder")) %>%
+  filter(reference %in% restricted,
+         intruder %in% restricted) %>%
+  lm(cornet ~ 0 + symbolic, data=.) %>%
+  summary
+```
+
+
+# Straightforard things
+
+## Correlation w/ PNAS behavior
+
+```{r cplxVsOldBehavior}
+d %>%
+  group_by(ID, reference, intruder) %>%
+  summarize(score = mean(success=="false"), .groups="drop") %>%
+  group_by(ID, reference) %>%
+  summarize(score = mean(score), .groups="drop") %>%
+  group_by(reference) %>%
+  summarize(mu = mean(score), se = sd(score) /sqrt(length(score)), .groups="drop") %>%
+  mutate(reference = factor(reference, ordered=F)) %>%
+  ggplot(aes(x=reference, y=mu, color=reference)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=mu-se, ymax=mu+se), width=0)
+```
+
+## ANOVAs
+
+```{r ANOVAs}
+expand.grid(dv = c("er", "rt"), pred = c("reference", "intruder")) %>%
+  group_by(dv, pred) %>%
+  group_modify(function(unused,k) {
+      pred = as.character(k$pred[[1]])
+      f = as.formula(paste0("score ~ ", pred, " + (", pred, " | ID)"))
+      d %>%
+        group_by_at(c("ID", pred)) %>%
+        summarize(score = ifelse(k$dv[[1]] == "er",
+                                 mean(success == "false"),
+                                 mean(rt)),
+                  .groups="drop") %>%
+        aov_4(f, data=.) %>%
+        nice(correction="none")
+       }) %>%
+  ungroup %>%
+  mutate(merged = paste0("F", df,"=",F,"; p", p.value)) %>%
+  select(dv, pred, ges, merged)
+
+d %>%
+  mutate(reference = factor(reference, ordered=F), intruder = factor(intruder, ordered=F)) %>%
+  group_by(ID, reference, intruder) %>%
+  summarize(score = mean(rt), .groups="drop") %>%
+  lm(score ~ reference * intruder, data=.) %>%
+  Anova(type="II")
+d %>%
+  mutate(reference = factor(reference, ordered=F), intruder = factor(intruder, ordered=F)) %>%
+  group_by(ID, reference, intruder) %>%
+  summarize(score = mean(success == "false"), .groups="drop") %>%
+  glm(score ~ reference * intruder, data=., family = binomial) %>%
+  Anova(type="II")
+```
+
+# Perform MDS
+
+Actually there are no more allipses now, as they were hidden under the shape...
+This makes `nrep` less important, so to make the whole thing faster I don't
+estimate them anymore.
+
+```{r bootstrapAndPlot}
+# Precompute a hash table of the relevant data per subject
+ht <- list()
+ld <- select(d, ID, success, rt, reference, intruder)
+lapply(unique(d$ID), function(i) { ht[[i]] <<- filter(ld, ID==i) }) -> useless
+ref <- mds(to_mds, type="ordinal")
+stressvec <- c()
+coord <- list()
+nrep <- 1
+
+pblapply(seq(1,nrep),
+       function(i) {
+         list_i <- sample(unique(d$ID), replace=TRUE)
+         l_to_mds <-
+           ht[list_i] %>%
+           bind_rows %>%
+           group_by(reference, intruder) %>%
+           summarize(score = mean(success=="true")/mean(rt), .groups="drop") %>%
+           complete(reference, intruder) %>%
+           pivot_wider(names_from="intruder",values_from="score") %>%
+           select(rectangle, everything()) %>%
+           column_to_rownames("reference")
+
+        l_to_mds <- (l_to_mds + t(l_to_mds)) / 2
+
+        o <- mds(l_to_mds, type="ordinal")
+
+        stressvec[i] <<- o$stressnorm
+        coord[[i]] <<- Procrustes(ref$conf, o$conf)$Yhat
+   }) -> useless
+
+M <- list()
+xy <- matrix(NA, nrow = nrep, ncol = 2)
+for (k in 1:11){
+  for (i in 1:nrep) {
+    xy[i,] <- coord[[i]][k,]
+  }
+  M[[k]] <- cov(xy)
+} 
+
+names(M) <- levelsInOrder
+alpha=.05
+bootci <- quantile(stressvec, probs = c(alpha/2, (1-alpha/2)))
+
+y0 <- Reduce("+", coord)/length(coord)
+stab.num <- sum(sapply(coord, function(yy) (norm(yy-y0))^2))
+stab.denom <- sum(sapply(coord, function(yy) (norm(yy))^2))
+stab <- 1 - stab.num/stab.denom
+result <- list(cov = M, conf = ref$conf, bootconf = coord, stressvec = stressvec, nrep = nrep, nobj = 11, alpha = alpha, bootci = bootci, stab = stab)
+class(result) <- "smacofboot"
+result$conf[1:11,1] <- result$conf[1:11,1] * (-1)
+result$conf[1:11,2] <- result$conf[1:11,2] * (-1)
+
+coefs <- tidy(lm(scale(props_all[6:6]) ~ 0 + result$conf))$estimate
+summary(lm(scale(props_all[6:6]) ~ 0 + result$conf))
+data.frame(x = result$conf[,1], y = result$conf[,2], shape = factor(levelsInOrder, levels=levelsInOrder)) %>%
+  ggplot(aes(x=x, y=y, image=paste0("res/", shape, "_2.png"))) +
+  geom_image(size = 0.2, by="height", asp=3.25)+
+  scale_size_identity() +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  theme_minimal() +
+  theme(legend.position="none") +
+  theme(
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    axis.title.x=element_blank(),
+    axis.title.y=element_blank(),
+  )
+```
+
+## Replicate with mixed effect models
+
+Here we can't use ER/RT as ER is undefined at the level of subject, so we
+"just" use 1/RT and we perform a regression of each individual's RDM with a glm
+featuring the two others. Plot avg rdm, model rdms, and regression for each
+individual.
+
+```{r mixedEffectRDMPrediction}
+base_d <-
+  d %>%
+  mutate(reref = if_else(reference < intruder, reference, intruder)) %>%
+  mutate(reint = if_else(reference < intruder, intruder, reference)) %>%
+  mutate(reference = reref, intruder = reint) %>%
+  group_by(ID, reference, intruder) %>%
+  summarize(score = mean(success == "true")/mean(rt), .groups="drop")
+
+to_rain_plot <-
+  base_d %>%
+  group_by(ID) %>%
+  mutate(humans = scale(score)) %>%
+  inner_join(symbolic, by=c("reference", "intruder")) %>%
+  inner_join(cornet, by=c("reference", "intruder")) %>%
+  group_modify(function(d,k) {
+    d %>%
+      lm(humans ~ 0 + symbolic + cornet, data=.) %>%
+      tidy
+  })
+
+asbmax <-
+  base_d %>%
+  group_by(ID) %>%
+  mutate(humans = scale(score)) %>%
+  group_by(reference, intruder) %>%
+  summarize(score = mean(score), .groups="drop") %>%
+  mutate(score = scale(score)) %>%
+  pull(score) %>%
+  abs %>%
+  max
+
+absmax <- max(asbmax, abs(symbolic$symbolic), abs(cornet$cornet))
+
+plh <-
+  base_d %>%
+  group_by(ID) %>%
+  mutate(humans = scale(score)) %>%
+  group_by(reference, intruder) %>%
+  summarize(score = mean(score), .groups="drop") %>%
+  mutate(score = scale(score)) %>%
+  mutate(sym = score) %>%
+  pivot_longer(c(score, sym)) %>%
+  rowwise %>%
+  mutate(rereference = if_else(name == "sym", intruder, reference),
+         reintruder = if_else(name == "sym", reference, intruder)) %>%
+  mutate(reference = rereference, intruder = reintruder) %>%
+  mutate(score = value) %>%
+  complete(reference, intruder) %>%
+  filter(reference <= intruder) %>%
+  ggplot(aes(x=reference, y=intruder, fill=score)) +
+  geom_tile() +
+  coord_fixed() +
+  scale_fill_gradientn(na.value = 'transparent', name="Dissimilarity\nz-score", limits=c(-absmax, absmax), colors=met.brewer("Hiroshige", type="continuous")) +
+  theme(panel.grid.major.y = element_blank()) +
+  ylab("") + xlab("") +
+  scale_x_discrete(labels=imgsInOrder) +
+  scale_y_discrete(labels=imgsInOrder)+
+  theme(axis.text.x = element_markdown(color = "black", size = 11)) +
+  theme(axis.text.y = element_markdown(color = "black", size = 11)) +
+  theme(legend.position="none") +
+  ggtitle("Human Behavior")
+
+pls <-
+  symbolic %>%
+  complete(reference, intruder) %>%
+  filter(reference <= intruder) %>%
+  mutate(score = symbolic) %>%
+  ggplot(aes(x=reference, y=intruder, fill=score)) +
+  geom_tile() +
+  coord_fixed() +
+  scale_fill_gradientn(na.value = 'transparent', name="Dissimilarity\nz-score", limits=c(-absmax, absmax), colors=met.brewer("Hiroshige", type="continuous")) +
+  theme(panel.grid.major.y = element_blank()) +
+  ylab("") + xlab("") +
+  scale_x_discrete(labels=imgsInOrder)+
+  scale_y_discrete(labels=c()) +
+  theme(axis.text.x = element_markdown(color = "black", size = 11)) +
+  theme(axis.text.y = element_markdown(color = "black", size = 11)) +
+  theme(legend.position="none") +
+  ggtitle("Symbolic")
+
+plc <-
+  cornet %>%
+  complete(reference, intruder) %>%
+  filter(reference <= intruder) %>%
+  mutate(score = cornet) %>%
+  ggplot(aes(x=reference, y=intruder, fill=score)) +
+  geom_tile() +
+  coord_fixed() +
+  scale_fill_gradientn(na.value = 'transparent', name="Dissimilarity\nz-score", limits=c(-absmax, absmax), colors=met.brewer("Hiroshige", type="continuous")) +
+  theme(panel.grid.major.y = element_blank()) +
+  ylab("") + xlab("") +
+  scale_x_discrete(labels=imgsInOrder) +
+  scale_y_discrete(labels=c()) +
+  theme(axis.text.x = element_markdown(color = "black", size = 11)) +
+  theme(axis.text.y = element_markdown(color = "black", size = 11)) +
+  ggtitle("Cornet")
+
+plreg <-
+  to_rain_plot %>%
+  mutate(term = factor(term, levels=c("symbolic", "cornet"))) %>%
+  ggplot(aes(x = term, y=estimate, fill=term)) +
+  geom_rain(
+    rain.side = 'f1x1',
+    id.long.var = "ID",
+    point.args.pos = rlang::list2(size=0.5),
+    line.args.pos = rlang::list2()) +
+  scale_fill_manual(values=c("#f1a340", "#998ec3")) +
+  geom_signif(
+    comparisons = list(c("symbolic", "cornet")),
+    map_signif_level = TRUE,
+    tip_length = 0) +
+  theme(legend.position = "none",
+        axis.text.x=element_blank(),
+        axis.title.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        )
+
+
+plh | pls | plc | plreg
+```
+
+# Comparing with other CNNs
+
+## CNNs against one another
+
+First observation: they are quite correlated!
+
+```{r compareRDMsLoad}
+load_model_fpath <- function(fname) {
+  nname = str_split_i(fname, "/", 5)
+  nname = gsub("diss_mat_model-", "", nname)
+  nname = gsub(".csv", "", nname)
+  nname = gsub("_layer", "", nname)
+  read.csv(fname) %>%
+  pivot_longer(c(everything(), -X)) %>%
+  # transmute(reference=X, intruder=name, "{nname}" := value) %>%
+  transmute(reference=X, intruder=name, value = scale(value)) %>%
+  mutate(reference = ordered(reference, levels=levelsInOrder),
+         intruder = ordered(intruder, levels=levelsInOrder)) %>%
+  mutate(nname = nname)
+}
+
+model_names <- c("cornet_s-V1", "cornet_s-V2", "cornet_s-V4", "cornet_s-IT", "cornet_s-flatten", "densenet-norm5", "resnet-avgpool")
+factor_names = c("symbolic", model_names)
+
+all_models <-
+  list.files("../derive_theoretical_RDMs/CNN/output", pattern="*.csv", full.names=T) %>%
+  lapply(load_model_fpath) %>%
+  bind_rows %>%
+  filter(reference < intruder) %>%
+  mutate(nname = ordered(nname, levels=factor_names)) %>%
+  arrange(nname)
+
+all_models %>%
+  pivot_wider(names_from="nname", values_from="value") %>%
+  select(-reference, -intruder) %>%
+  cor %>%
+  corrplot(type="upper", method="color", col.lim=c(0,1), col=rev(COL2(diverging = "RdYlBu")), tl.pos = 'd', tl.col = 'black')
+```
+
+## Each CNN against human data
+
+```{r compareRDMsData}
+modeled <-
+  lapply(model_names,
+         function(this.nname) {
+          base_d %>%
+            group_by(ID) %>%
+            mutate(humans = scale(score)) %>%
+            inner_join(symbolic, by=c("reference", "intruder")) %>%
+            inner_join((filter(all_models, nname==this.nname)), by=c("reference", "intruder")) %>%
+            group_modify(function(d,k) {
+              d %>%
+                lm(humans ~ 0 + symbolic + value, data=.) %>%
+                tidy
+            }) %>%
+            mutate(term = factor(if_else(term == "symbolic", "symbolic", this.nname), levels=factor_names)) %>%
+            mutate(nname = this.nname)
+         }) %>%
+    bind_rows
+```
+
+```{r plotAllPairRDMs}
+  lapply(model_names,
+       function(this.nname) {
+         nth.color <-
+          modeled %>%
+          filter(nname == this.nname) %>%
+          mutate(nname = ordered(nname, levels=factor_names)) %>%
+          pull(nname) %>%
+          as.numeric %>%
+          unique
+        nth.color <- (nth.color - 2) / 5
+        color <- if_else(grepl("cornet", this.nname),
+                         darken(lighten("#998ec3", amount = 0.5), amount = nth.color),
+                         if_else(grepl("densenet", this.nname), "#C2A58D", "#8DC28E"))
+
+        to_plot <- modeled %>% filter(nname == this.nname)
+
+        pvals_str <-
+          to_plot %>%
+          filter(term != "symbolic") %>%
+          group_by(term, nname) %>%
+          summarize(stat = t.test(estimate)$statistic,
+                    pval = t.test(estimate)$p.value,
+                    .groups="drop") %>%
+          mutate(stat_string =
+                 paste0("t=", round(stat, 1), "\n",
+                        if_else(pval < .001, "p<.001", paste0("p=", round(pval, 2))))) %>%
+          pull(stat_string)
+
+        str_y <- 0.5346326 + 0.1  # Abs max y-coord of any datapoint
+
+        to_plot %>%
+          ggplot(aes(x = term, y=estimate, fill=term)) +
+          annotate("text", x = this.nname, y = str_y, label = pvals_str) +
+          geom_rain(
+            rain.side = 'f1x1',
+            id.long.var = "ID",
+            point.args.pos = rlang::list2(size=0.5),
+            line.args.pos = rlang::list2()) +
+          scale_fill_manual(values=c("#f1a340", color)) +
+          geom_signif(
+            comparisons = list(c("symbolic", this.nname)),
+            map_signif_level = TRUE,
+            tip_length = 0) +
+          theme(legend.position = "none",
+                axis.text.x=element_blank(),
+                axis.title.x=element_blank(),
+                axis.ticks.x=element_blank(),
+                axis.title.y=element_blank(),
+                ) +
+       ggtitle(this.nname) +
+       ylim(-.4, .9)
+       }) %>%
+  plot_grid(plotlist=., ncol=5)
+```
