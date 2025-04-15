@@ -2,7 +2,12 @@
 title: Visual Search, all pairs, behavior analysis
 author:
   - Mathias Sablé-Meyer
-  - [...]
+  - Lucas Benjamin
+  - Cassandra Potier Watkins
+  - Chenxi He
+  - Maxence Pajot
+  - Théo Morfoisse
+  - Fosca Al Roumi
   - Stanislas Dehaene
 lang: en
 output: rmdformats::readthedown
