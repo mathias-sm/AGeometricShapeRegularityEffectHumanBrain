@@ -58,6 +58,9 @@ models["Symbolic"] = "../../../derive_theoretical_RDMs/symbolic/symbolic_sym_dis
 models["densenet"] = "../../../derive_theoretical_RDMs/CNN/output/diss_mat_model-densenet_layer-norm5.csv"
 models["resnet"] = "../../../derive_theoretical_RDMs/CNN/output/diss_mat_model-resnet_layer-avgpool.csv"
 
+models["ViT"] = "../../../derive_theoretical_RDMs/more_NNs/ViT/last_layer"
+models["convnext"] = "../../../derive_theoretical_RDMs/more_NNs/convnext/last_layer"
+
 
 def parse_file(fname):
     """
@@ -74,7 +77,7 @@ def parse_file(fname):
     rdm.sort_by(shape=ordered)
     return rdm
 
-smooth = "smooth"
+smooth = "unsmooth"
 rdms_movie = rsatoolbox.rdm.rdms.load_rdm(f"./all_rdms/rdms_{cm}_{smooth}.pkl")
 times = rdms_movie.subset('subj', ['sub-01']).rdm_descriptors['time']
 
@@ -110,16 +113,23 @@ for i, mname in enumerate(models.keys()):
             verbose=False,
             tail=1)
     print([mname, i, p_values[p_values < .05]])
+
     p05 = np.nan * np.zeros((301))
     for x in np.where(p_values < .05)[0]:
         filt = [int(x) for x in clusters[x][0]+offset]
         p05[filt] = mu[filt]
-        print(f"From {np.min((np.array(filt)-offset) * .004)*1000}ms to {np.max((np.array(filt)-offset) * .004)*1000}ms")
-    p1 = np.nan * np.zeros((301))
+        print(f"Model {mname}; from {np.min((np.array(filt)-offset) * .004)*1000}ms to {np.max((np.array(filt)-offset) * .004)*1000}ms; max at {times[np.where(mu == np.max(mu))[0][0]]}")
+
+    p05_binary = (p05 > 0) * .99
+    p05_binary[p05_binary == 0] = np.nan
+    print(p05_binary)
     axes[i].plot(times, mu, color="k", linewidth=0.4)
-    axes[i].plot(times, p05, color="k")
-    axes[i].fill_between(times, p05, np.zeros((301)), alpha=.5, facecolor="k")
+    axes[i].plot(times, p05, label=mname, color="k", linewidth=1.5)
+    axes[i].plot(times, (np.max(mu+se) + .02) * p05_binary, color="k", linewidth=1.5)
+    # axes[i].fill_between(times, p05, np.zeros((301)), alpha=.5, facecolor=color[i])
+    axes[i].fill_between(times, mu-se, mu+se, alpha=.2, facecolor="k")
+    axes[i].set_ylim(-.05, .4)
     axes[i].set_title(mname)
     pretty_plot(axes[i])
 
-fig.savefig(f"./figs/lm_{cm}_{method}_{smooth}_multiple.svg")
+fig.savefig(f"./figs/lm_{cm}_{method}_{smooth}_multiple.svg", format="svg")

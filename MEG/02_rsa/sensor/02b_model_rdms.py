@@ -17,11 +17,11 @@ matplotlib.rc('font', **font)
 def pretty_plot(ax=None):
     if ax is None:
         ax = plt.gca()
-    ax.tick_params(colors='dimgray')
-    ax.xaxis.label.set_color('dimgray')
-    ax.yaxis.label.set_color('dimgray')
+    ax.tick_params(colors='k')
+    ax.xaxis.label.set_color('k')
+    ax.yaxis.label.set_color('k')
     try:
-        ax.zaxis.label.set_color('dimgray')
+        ax.zaxis.label.set_color('k')
     except AttributeError:
         pass
     try:
@@ -29,8 +29,8 @@ def pretty_plot(ax=None):
         ax.yaxis.set_ticks_position('left')
     except ValueError:
         pass
-    ax.spines['left'].set_color('dimgray')
-    ax.spines['bottom'].set_color('dimgray')
+    ax.spines['left'].set_color('k')
+    ax.spines['bottom'].set_color('k')
     ax.spines['right'].set_visible(False)
     ax.spines['top'].set_visible(False)
     return ax
@@ -42,7 +42,7 @@ subs = [f"sub-{(i+1):02}" for i in range(20)]
 ordered = ["square", "rectangle", "isoTrapezoid", "parallelogram", "losange", "kite", "rightKite", "rustedHinge", "hinge", "trapezoid", "random"]
 
 cm = "crossnobis"
-for smooth in ["smooth", "unsmooth"]:
+for smooth in ["unsmooth"]:
     rdms_movie = rsatoolbox.rdm.rdms.load_rdm(f"./all_rdms/rdms_{cm}_{smooth}.pkl")
     times = rdms_movie.subset('subj', ['sub-01']).rdm_descriptors['time']
 
@@ -62,7 +62,7 @@ for smooth in ["smooth", "unsmooth"]:
         return rdm
 
     symbolic = parse_file("../../../derive_theoretical_RDMs/symbolic/symbolic_sym_diss_mat.csv")
-    IT = parse_file("../../../derive_theoretical_RDMs/CNN/output/diss_mat_model-cornet_s_layer-IT.csv")
+    IT = parse_file("../../../derive_theoretical_RDMs/more_NNs/dino/last_layer")
 
     model_rdms = copy.deepcopy(symbolic)
     model_rdms.append(copy.deepcopy(IT))
@@ -82,9 +82,9 @@ for smooth in ["smooth", "unsmooth"]:
 
     plt.close('all')
     plt.figure(figsize=(5, 2))
-    plt.axhline(y=0, color='dimgray', linestyle='-', linewidth=0.5)
-    plt.axvline(x=0, color='dimgray', linestyle='-', linewidth=0.5)
-    plt.axvline(x=1, color='dimgray', linestyle='-', linewidth=0.5)
+    plt.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
+    plt.axvline(x=0, color='k', linestyle='-', linewidth=0.5)
+    plt.axvline(x=1, color='k', linestyle='-', linewidth=0.5)
     plt.axvline(x=0.8, linewidth=0.5, linestyle=(0, (5, 10)), color='k')
     for i in range(1,-1,-1):
         r_ = fitted[:, i, :]
@@ -111,9 +111,11 @@ for smooth in ["smooth", "unsmooth"]:
         plt.plot(times, mu, color=color[i], linewidth=0.4)
         plt.plot(times, p05, label=model_names[i], color=color[i], linewidth=1.5)
         plt.plot(times, p05_binary + ((1-i)/50), label=model_names[i], color=color[i], linewidth=1.5)
+        # plt.fill_between(times, p05, np.zeros((301)), alpha=.5, facecolor=color[i])
         plt.fill_between(times, mu-se, mu+se, alpha=.2, facecolor=color[i])
 
     plt.xlabel('time')
     plt.ylabel(f'model-data crossnobis similarity')
+    #plt.legend()
     pretty_plot()
-    plt.savefig(f"./figs/lm_{cm}_{method}_{smooth}.svg")
+    plt.savefig(f"./figs/lm_{cm}_{method}_{smooth}_dino.svg")
