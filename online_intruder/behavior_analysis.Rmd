@@ -24,11 +24,11 @@ pacman::p_load(ggplot2, grid, cowplot,     # Plot manipulation & theme
                afex,                       # Sane defaults for `aov` through `aov_ez`
                ggrain,
                ggsignif,
-               rsvg,
                ggimage,
                patchwork,
                MetBrewer,
                smacof,
+               svglite,
                png,
                broom.mixed,
                ggtext,
@@ -36,7 +36,6 @@ pacman::p_load(ggplot2, grid, cowplot,     # Plot manipulation & theme
                parallel,
                optimx,
                car,
-               ggpubr,
                corrplot,
                install = T)
 
@@ -276,8 +275,7 @@ result$conf[1:11,2] <- result$conf[1:11,2] * (-1)
 
 coefs <- tidy(lm(scale(props_all[6:6]) ~ 0 + result$conf))$estimate
 summary(lm(scale(props_all[6:6]) ~ 0 + result$conf))
-pl <-
-  data.frame(x = result$conf[,1], y = result$conf[,2], shape = factor(levelsInOrder, levels=levelsInOrder)) %>%
+data.frame(x = result$conf[,1], y = result$conf[,2], shape = factor(levelsInOrder, levels=levelsInOrder)) %>%
   ggplot(aes(x=x, y=y, image=paste0("res/", shape, "_2.png"))) +
   geom_image(size = 0.2, by="height", asp=3.25)+
   geom_segment(aes(x = 0, y = 0, xend = coefs[1], yend = coefs[1]), arrow = arrow(length = unit(0.5, "cm"))) +
@@ -296,7 +294,7 @@ pl <-
     axis.title.x=element_blank(),
     axis.title.y=element_blank(),
     axis.ticks.x = element_line(),
-    axis.ticks.x = element_line()
+    axis.ticks.y = element_line()
   )
 ggsave("MDS.svg", plot = pl, height=3, width=6)
 pl
