@@ -275,7 +275,8 @@ result$conf[1:11,2] <- result$conf[1:11,2] * (-1)
 
 coefs <- tidy(lm(scale(props_all[6:6]) ~ 0 + result$conf))$estimate
 summary(lm(scale(props_all[6:6]) ~ 0 + result$conf))
-data.frame(x = result$conf[,1], y = result$conf[,2], shape = factor(levelsInOrder, levels=levelsInOrder)) %>%
+pl <-
+  data.frame(x = result$conf[,1], y = result$conf[,2], shape = factor(levelsInOrder, levels=levelsInOrder)) %>%
   ggplot(aes(x=x, y=y, image=paste0("res/", shape, "_2.png"))) +
   geom_image(size = 0.2, by="height", asp=3.25)+
   geom_segment(aes(x = 0, y = 0, xend = coefs[1], yend = coefs[1]), arrow = arrow(length = unit(0.5, "cm"))) +
@@ -297,7 +298,6 @@ data.frame(x = result$conf[,1], y = result$conf[,2], shape = factor(levelsInOrde
     axis.ticks.y = element_line()
   )
 ggsave("MDS.svg", plot = pl, height=3, width=6)
-pl
 ```
 
 ## Replicate with mixed effect models
@@ -428,6 +428,69 @@ plreg <-
 
 
 plh | pls | plc | plreg
+```
+
+```{r plreg_not_named}
+not_named <- c("kite", "rightKite", "rustedHinge", "hinge", "random")
+named <- setdiff(levelsInOrder, not_named)
+names <-
+pl.restricted <-
+  base_d %>%
+  group_by(ID) %>%
+  mutate(humans = score) %>%
+  inner_join(symbolic, by=c("reference", "intruder")) %>%
+  inner_join(cornet, by=c("reference", "intruder")) %>%
+  filter(reference %in% not_named) %>%
+  filter(intruder %in% not_named) %>%
+  group_modify(function(d,k) {
+    d %>%
+      mutate(humans = scale(humans),
+             symbolic = scale(symbolic),
+             cornet = scale(cornet)) %>%
+      lm(humans ~ 0 + symbolic + cornet, data=.) %>%
+      tidy
+  }) %>%
+  mutate(term = factor(term, levels=c("symbolic", "cornet"))) %>%
+  ggplot(aes(x = term, y=estimate, fill=term)) +
+  geom_rain(
+    rain.side = 'f1x1',
+    id.long.var = "ID",
+    point.args.pos = rlang::list2(size=0.5),
+    line.args.pos = rlang::list2()) +
+  scale_fill_manual(values=c("#f1a340", "#998ec3")) +
+  geom_signif(
+    comparisons = list(c("symbolic", "cornet")),
+    map_signif_level = TRUE,
+    tip_length = 0)
+
+
+
+ggsave("/tmp/restricted.svg", pl.restricted, height=3, width=3)
+```
+
+```{r}
+base_d %>%
+  group_by(ID) %>%
+  mutate(humans = score) %>%
+  inner_join(symbolic, by=c("reference", "intruder")) %>%
+  inner_join(cornet, by=c("reference", "intruder")) %>%
+  filter(reference %in% not_named) %>%
+  filter(intruder %in% not_named) %>%
+  group_modify(function(d,k) {
+    d %>%
+      mutate(humans = scale(humans),
+             symbolic = scale(symbolic),
+             cornet = scale(cornet)) %>%
+      lm(humans ~ 0 + symbolic + cornet, data=.) %>%
+      tidy
+  }) %>%
+  mutate(term = factor(term, levels=c("symbolic", "cornet"))) %>%
+  ungroup %>%
+  select(ID, term, estimate) %>%
+  pivot_wider(names_from=term, values_from=estimate) %>%
+  mutate(delta = symbolic - cornet) %>%
+  pull(delta) %>%
+  t.test
 ```
 
 # Comparing with other CNNs
