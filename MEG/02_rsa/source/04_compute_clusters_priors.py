@@ -11,7 +11,8 @@ from mne.stats import spatio_temporal_cluster_1samp_test, permutation_cluster_1s
 from scipy.stats.distributions import t
 import fire
 
-where = {"IT": (.0,.328), "dino_last": (.0, .456), "skel_2": (.076, .260), "skel_2_b": (.284, .368), "symbolic": (.136,.452)}
+
+where = {"IT": (.06,.320), "dino_last": (.064, .400), "skel_2": (.076, .260), "skel_2_b": (.284, .368), "symbolic": (.128,.400)}
 result = {}
 
 based = "../../bids_data/derivatives"
