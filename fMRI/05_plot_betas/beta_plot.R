@@ -154,6 +154,32 @@ read.csv("../bids_dataset/derivatives/bootstrap_clusters/tables/adults_task-cate
   bind_rows
 
 
+##############
+# Test shape1 > (house + face + object) in PNAS math ROIs
+###########
+
+list.files(path=base_path, pattern="sub-.*_task-category_published-roi_just-betas.csv") %>%
+  lapply(function(x) {mutate(read.csv(paste0(base_path, x)), fname=x)}) %>%
+  bind_rows %>%
+  filter(name %in% cats) %>%
+  mutate(name = ordered(name, levels=cats)) %>%
+  mutate(age_group = if_else(as.numeric(str_sub(subject, start=5)) >= 300, "Children", "Adults")) %>%
+  mutate(mask_name = str_sub(mask_name, 6, -8)) %>%
+  pivot_wider(names_from=name, values_from=value) %>%
+  mutate(ctr_shapes = 2*shape1 + 2*shape3 - (face + tool + house + Chinese),
+         ctr_shape1 = 3*shape1 - (face + tool + house),
+         ctr_shape3 = shape3 - word) %>%
+  group_by(age_group, mask_name) %>%
+  group_modify(function(dd,kk) {
+    tidy(t.test(dd$ctr_shape1, alternative="greater"))
+  }) %>%
+  select(-parameter, -conf.low, -conf.high, -alternative, -method, -estimate) %>%
+  mutate(pstar = case_when(p.value < .001 ~ "***", p.value < .01 ~ "**", p.value < .05 ~ "*", T ~ "ns")) %>%
+  mutate(p.value = if_else(p.value < .001, "p<.001", paste0("p=",round(p.value, 3)))) %>%
+  mutate(statistic = round(statistic, 2)) %>%
+  write.csv("../bids_dataset/derivatives/extracted_betas/sub-average_task-category_published-roi_stats.csv", row.names=F)
+
+
 
 ##############
 # Test shape1 and 3 ROIs in c_numer IPSs

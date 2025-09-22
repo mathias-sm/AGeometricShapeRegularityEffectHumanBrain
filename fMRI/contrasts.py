@@ -47,6 +47,7 @@ geom_preds = {
 contrast_motor    = "star"
 contrast_ffa      = "3*face              - (word + tool + house)"
 contrast_vwfa     = "3*word              - (face + tool + house)"
+contrast_number   = "number              - word"
 contrast_tool     = "3*tool              - (face + word + house)"
 contrast_house    = "3*house             - (face + word + tool)"
 contrast_shapes   = "2*shape1 + 2*shape3 - (face + tool + house + word)"
@@ -71,6 +72,7 @@ contrasts["category"] = {
     "motor": contrast_motor,
     "ffa": contrast_ffa,
     "vwfa": contrast_vwfa,
+    "c_number": contrast_number,
     "tool": contrast_tool,
     "house": contrast_house,
     "all_shapes": contrast_shapes,
